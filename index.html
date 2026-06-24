@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>レールガン・物理シミュレーターGUI</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #1e1e24;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 { color: #4af; margin-bottom: 10px; }
+        .container {
+            display: flex;
+            gap: 20px;
+            background: #2a2a35;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            min-width: 250px;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+        }
+        label { font-size: 0.9em; color: #aaa; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; }
+        .value-display { text-align: right; font-weight: bold; color: #4af; }
+        button {
+            padding: 12px;
+            background-color: #4af;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-size: 1em;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #39d; }
+        canvas {
+            background-color: #111;
+            border: 2px solid #444;
+            border-radius: 4px;
+        }
+        .stats {
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 1.1em;
+            background: #111;
+            padding: 10px;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>電磁気加速レールガン シミュレーター</h1>
+    
+    <div class="container">
+        <div class="controls">
+            <div class="control-group">
+                <label>印加電流 (A)</label>
+                <input type="range" id="currentSim" min="10000" max="100000" step="5000" value="50000">
+                <div class="value-display" id="currentVal">50,000 A</div>
+            </div>
+            <div class="control-group">
+                <label>弾体の質量 (g)</label>
+                <input type="range" id="massSim" min="2" max="50" step="1" value="10">
+                <div class="value-display" id="massVal">10 g</div>
+            </div>
+            <button id="fireBtn">砲撃開始 (FIRE)</button>
+            
+            <div class="stats" id="statsDisplay">
+                状態: 待機中<br>
+                現在の速度: 0.0 m/s<br>
+                最高時速: 0.0 km/h<br>
+                到達時間: -- ms
+            </div>
+        </div>
+
+        <canvas id="simCanvas" width="800" height="400"></canvas>
+    </div>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- 物理定数・固定設定 ---
+const MU_0 = 4 * Math.PI * Math.E - 7;
+const railLengthMeter = 2.0; // レールの物理的な長さ(2m)
+const wireRadius = 0.005;
+const railDistance = 0.02;
+const L_prime = (MU_0 / Math.PI) * Math.log(railDistance / wireRadius);
+
+// 描画用のスケール (2メートルのレールを canvasの 500px で表現)
+const scaleX = 250; // 1メートル = 250ピクセル
+const startX = 50;  // レールの左端のX座標
+const railY1 = 180; // 上部レールのY座標
+const railY2 = 220; // 下部レールのY座標
+
+// --- シミュレーション状態変数 ---
+let pos = 0;        // 位置 (m)
+let vel = 0;        // 速度 (m/s)
+let time = 0;       // 時間 (s)
+let isFired = false;
+let hasLeftRail = false;
+let maxVel = 0;
+
+// UI要素
+const currentInput = document.getElementById('currentSim');
+const massInput = document.getElementById('massSim');
+const currentVal = document.getElementById('currentVal');
+const massVal = document.getElementById('massVal');
+const fireBtn = document.getElementById('fireBtn');
+const statsDisplay = document.getElementById('statsDisplay');
+
+// スライダー変更時の表示更新
+currentInput.addEventListener('input', () => currentVal.innerText = Number(currentInput.value).toLocaleString() + " A");
+massInput.addEventListener('input', () => massVal.innerText = massInput.value + " g");
+
+// 発射ボタン
+fireBtn.addEventListener('click', () => {
+    pos = 0;
+    vel = 0;
+    time = 0;
+    maxVel = 0;
+    isFired = true;
+    hasLeftRail = false;
+});
+
+// --- メインループ (描画 ＆ 物理計算) ---
+function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // パラメータの取得
+    const I = parseFloat(currentInput.value);
+    const m = parseFloat(massInput.value) / 1000; // グラムをkgに変換
+    const dt = 0.0003; // アニメーション同期用のタイムステップ(約60fpsに調整)
+
+    // --- 1. 物理計算 ---
+    if (isFired) {
+        if (pos < railLengthMeter) {
+            // レール内：ローレンツ力による加速
+            const force = 0.5 * L_prime * Math.pow(I, 2);
+            const accel = force / m;
+            vel += accel * dt;
+            pos += vel * dt;
+            time += dt;
+            maxVel = vel;
+            
+            statsDisplay.innerHTML = `
+                状態: <span style="color:#ff4757;">加速中</span><br>
+                現在の速度: ${vel.toFixed(1)} m/s<br>
+                最高時速: ${(vel * 3.6).toFixed(1)} km/h<br>
+                経過時間: ${(time * 1000).toFixed(1)} ms
+            `;
+        } else {
+            // レール外（空間）：等速直線運動（簡易化のため空気抵抗は無視）
+            hasLeftRail = true;
+            pos += vel * dt;
+            
+            statsDisplay.innerHTML = `
+                状態: <span style="color:#2ed573;">自由飛行中</span><br>
+                砲口初速: ${maxVel.toFixed(1)} m/s<br>
+                最高時速: ${(maxVel * 3.6).toFixed(1)} km/h<br>
+                加速時間: ${(time * 1000).toFixed(1)} ms
+            `;
+        }
+
+        // 画面外に出たらリセット
+        if (startX + pos * scaleX > canvas.width + 50) {
+            isFired = false;
+        }
+    }
+
+    // --- 2. 描画処理 ---
+    
+    // 背景のグリッド（空間を表現）
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    for(let i=0; i<canvas.width; i+=50) {
+        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
+    }
+
+    // レールの描画（2本の平行線）
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 6;
+    const railEndX = startX + railLengthMeter * scaleX;
+    
+    ctx.beginPath(); // 上レール
+    ctx.moveTo(startX, railY1); ctx.lineTo(railEndX, railY1); ctx.stroke();
+    ctx.beginPath(); // 下レール
+    ctx.moveTo(startX, railY2); ctx.lineTo(railEndX, railY2); ctx.stroke();
+
+    // レール内の電磁気エフェクト（加速中のみ）
+    if (isFired && !hasLeftRail) {
+        ctx.strokeStyle = 'rgba(0, 170, 255, 0.4)';
+        ctx.lineWidth = railY2 - railY1;
+        ctx.beginPath();
+        ctx.moveTo(startX, (railY1 + railY2)/2);
+        ctx.lineTo(startX + pos * scaleX, (railY1 + railY2)/2);
+        ctx.stroke();
+    }
+
+    // 弾体（球）の描画
+    const ballX = startX + pos * scaleX;
+    const ballY = (railY1 + railY2) / 2;
+    const ballRadius = 12;
+
+    ctx.shadowBlur = isFired ? 15 : 0;
+    ctx.shadowColor = hasLeftRail ? '#ff4757' : '#00aaff'; // 飛び出したら摩擦熱で赤くなる演出
+
+    ctx.fillStyle = hasLeftRail ? '#ff6b6b' : '#00d2d3';
+    ctx.beginPath();
+    ctx.arc(ballX, ballY, ballRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // シャドウのリセット
+    ctx.shadowBlur = 0;
+
+    requestAnimationFrame(animate);
+}
+
+// ループ開始
+animate();
+</script>
+</body>
+</html>
